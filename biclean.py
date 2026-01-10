@@ -117,7 +117,7 @@ def remove_st_in_tt(input_file, output_file, dirty_file=None):
         print(f"An error occurred: {e}")
 
 
-def remove_ass_tags(input_file, output_file, dirty_file=None):
+def remove_subtitle_items(input_file, output_file, dirty_file=None):
     """
     Removes .ass tags from the ST/TT column in the input file (.csv), and saves the cleaned content to the output file (.csv). Uncleaned contents will be saved to dirty_file (.csv).
     .ass tags are quoted by curly brackets, such as {\fs20}, {\fnxxx}, {\an8}.
@@ -139,9 +139,23 @@ def remove_ass_tags(input_file, output_file, dirty_file=None):
                 st = row["ST"].strip()
                 tt = row["TT"].strip()
 
-                # Remove .ass tags from ST
-                st_cleaned = remove_curly_bracket_tags(st)
-                tt_cleaned = remove_curly_bracket_tags(tt)
+                # Remove subtitle items
+                st_cleaned = remove_leading_hyphen(st)
+                st_cleaned = remove_curly_bracket_tags(st_cleaned)
+                st_cleaned = remove_square_bracket_tags(st_cleaned)
+                # st_cleaned = remove_parentheses_tags(st_cleaned)
+                st_cleaned = remove_html_tags(st_cleaned)
+                # Replace multiple spaces with a single space
+                st_cleaned = re.sub(r"\s+", " ", st_cleaned).strip()
+
+                tt_cleaned = remove_leading_hyphen(tt)
+                tt_cleaned = remove_curly_bracket_tags(tt_cleaned)
+                tt_cleaned = remove_square_bracket_tags(tt_cleaned)
+                # tt_cleaned = remove_parentheses_tags(tt_cleaned)
+                tt_cleaned = remove_html_tags(tt_cleaned)
+                # Replace multiple spaces with a single space
+                tt_cleaned = re.sub(r"\s+", " ", tt_cleaned).strip()
+
                 if st != st_cleaned or tt != tt_cleaned:
                     time_tag_lines += 1
                     dirty_writer.writerow(row)
@@ -240,7 +254,14 @@ def remove_timestamps(input_file, output_file, dirty_file=None):
         print(f"Error: {input_file} not found.")
     except Exception as e:
         print(f"An error occurred: {e}")
- 
+
+
+def remove_leading_hyphen(text):
+    """
+    Removes leading hyphens from the given text.
+    """
+    return re.sub(r'^-+', '', text)
+
 
 def remove_curly_bracket_tags(text):
     """
@@ -256,6 +277,21 @@ def remove_square_bracket_tags(text):
     Anything inside the curly bracket should be removed. The curly brackets should be removed, too.
     """
     return re.sub(r"\[.*?\]", "", text)
+
+
+def remove_parentheses_tags(text):
+    """
+    Removes .ass tags from the given text.
+    Anything inside the parentheses should be removed. The parentheses should be removed, too.
+    """
+    return re.sub(r"\([^)]*\)", "", text)
+
+
+def remove_html_tags(text):
+    """
+    Removes HTML tags from the given text.
+    """
+    return re.sub(r'<[^>]*>', '', text)
 
 
 def count_lines(path: str) -> int:
@@ -493,9 +529,9 @@ def main():
 
     remove_st_in_tt("./data/clean/01_cleaned.csv", "./data/clean/02_st_in _tt_removed.csv", "./data/dirty/bilingual_dirty.csv")
 
-    remove_ass_tags("./data/clean/02_st_in _tt_removed.csv", "./data/clean/03_ass_tags_removed.csv", "./data/dirty/ass_tags_dirty.csv")
+    remove_subtitle_items("./data/clean/02_st_in _tt_removed.csv", "./data/clean/03_subtitle_items_removed.csv", "./data/dirty/ass_tags_dirty.csv")
 
-    remove_timestamps("./data/clean/03_ass_tags_removed.csv", "./data/clean/04_time_tags_removed.csv", "./data/dirty/time_tags_dirty.csv")
+    remove_timestamps("./data/clean/03_subtitle_items_removed.csv", "./data/clean/04_time_tags_removed.csv", "./data/dirty/time_tags_dirty.csv")
 
     #pre_process_file(merged_file, "preprocessed.csv")
     #remove_duplicate_content("preprocessed.csv", cleaned_file, duplicate_file)
