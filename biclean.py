@@ -338,6 +338,10 @@ def remove_bilingual_content(input_file, output_file_clean, output_file_bilingua
                 writer_bilingual.writerow(row)
                 row[reader.fieldnames[2]] = col3[:-len(col2)]
                 writer_clean.writerow(row)
+            elif col3.startswith(col2):
+                writer_bilingual.writerow(row)
+                row[reader.fieldnames[2]] = col3[len(col2):]
+                writer_clean.writerow(row)
             else:
                 writer_clean.writerow(row)
             data_idx += 1
