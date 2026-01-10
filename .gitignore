@@ -207,5 +207,4 @@ marimo/_lsp/
 __marimo__/
 
 # madOS
-.DS_Store/
-./data/.DS_Store/
+.DS_Store
