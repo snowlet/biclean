@@ -22,6 +22,11 @@ def merge_bilingual_files(st_file, tt_file, output_file):
             writer = csv.writer(outf)
             writer.writerow(["Index", "ST", "TT"])  # Write header
 
+            # Convert TT lines to simplified Chinese,
+            # as some contain traditional Chinese characters.
+            for tt_line in tt_lines:
+                tt_line = convert_chinese_variants(tt_line, target_variant="simplified", convert_idiom=False)
+
             for index, (st_line, tt_line) in enumerate(zip(st_lines, tt_lines), start=1):
                 writer.writerow([index, st_line.strip(), tt_line.strip()])
 
@@ -251,14 +256,6 @@ def remove_square_bracket_tags(text):
     return re.sub(r"\[.*?\]", "", text)
 
 
-#def remove_timestamps(text):
-    """
-    Removes time tags from the given text.
-    Time tags are quoted by square brackets, such as [00:01:23.45] or [00:01:23,45].
-    """
-#    return re.sub(r"\[\d{2}:\d{2}:\d{2}[.,]\d{2}\]", "", text)
-
-
 def count_lines(path: str) -> int:
     """
     Counts the number of lines in a file.
@@ -410,6 +407,29 @@ def remove_special_chars(text):
 
     return text
 
+
+def convert_chinese_variants(text, target_variant='simplified', convert_idiom=False):
+    """
+    Converts Chinese text between Simplified and Traditional variants.
+    target_variant: 'simplified' or 'traditional'
+    convert_idiom: whether to convert idioms
+    """
+    try:
+        from opencc import OpenCC
+    except ImportError:
+        print("Error: opencc module not found. Please install it using 'pip install opencc-python-reimplemented'.")
+        return text
+
+    if target_variant == 'simplified':
+        cc = OpenCC('tw2sp.json' if convert_idiom else 't2s.json')
+    elif target_variant == 'traditional':
+        cc = OpenCC('s2twp.json' if convert_idiom else 's2t.json')
+    else:
+        print("Error: target_variant must be either 'simplified' or 'traditional'.")
+        return text
+
+    converted_text = cc.convert(text)
+    return converted_text
 
 def remove_non_cjk_characters(text):
     """
