@@ -10,6 +10,8 @@ def merge_bilingual_files(st_file, tt_file, output_file):
     The output file will be a CSV with three columns: index, ST, TT.
     The first column is the index, the second column is the source text (ST),
     and the third column is the target text (TT).
+    TT will be forcibly converted to simplified Chinese.
+    1-based index is used.
     """
     try:
         with open(st_file, "r", encoding="utf-8") as stf, open(tt_file, "r", encoding="utf-8") as ttf, open(output_file, "w", encoding="utf-8", newline='') as outf:
@@ -311,7 +313,7 @@ def remove_duplicate_content(input_file, output_file_clean, output_file_duplicat
 
 def remove_bilingual_content(input_file, output_file_clean, output_file_bilingual):
     """
-    Removes ST (from the second column) that exists at the end of the third column (TT).
+    Removes ST (from the second column) that exists at the beginning or the end of the third column (TT).
     These rows imply bilingual content and are cleaned from the TT.
     """
 
