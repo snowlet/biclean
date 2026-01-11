@@ -30,6 +30,8 @@ def merge_bilingual_files(st_file, tt_file, output_file):
                 tt_line = convert_chinese_variants(tt_line, target_variant="simplified", convert_idiom=False)
 
             for index, (st_line, tt_line) in enumerate(zip(st_lines, tt_lines), start=1):
+                st_line = remove_special_chars(st_line)
+                tt_line = remove_special_chars(tt_line)
                 writer.writerow([index, st_line.strip(), tt_line.strip()])
 
         print(f"Merged file saved to {output_file}")
@@ -62,11 +64,11 @@ def remove_empty_lines(input_file, output_file, dirty_st_file=None, dirty_tt_fil
             dirty_tt_writer.writeheader()
 
             for row in reader:
-                if row["ST"].strip() == "":
+                if row["ST"].strip() == "" or row["ST"].strip() == "-":
                     lines_st_removed += 1
                     dirty_st_writer.writerow(row)
                     continue
-                elif row["TT"].strip() == "":
+                elif row["TT"].strip() == "" or row["TT"].strip() == "-":
                     lines_tt_removed += 1
                     dirty_tt_writer.writerow(row)
                     continue
@@ -140,7 +142,9 @@ def remove_subtitle_items(input_file, output_file, dirty_file=None):
                 tt = row["TT"].strip()
 
                 # Remove subtitle items
-                st_cleaned = remove_leading_hyphen(st)
+                st_cleaned = remove_leading_hyphens(st)
+                st_cleaned = remove_leading_underscores(st_cleaned)
+                st_cleaned = remove_trailing_underscores(st_cleaned)
                 st_cleaned = remove_curly_bracket_tags(st_cleaned)
                 st_cleaned = remove_square_bracket_tags(st_cleaned)
                 # st_cleaned = remove_parentheses_tags(st_cleaned)
@@ -148,7 +152,9 @@ def remove_subtitle_items(input_file, output_file, dirty_file=None):
                 # Replace multiple spaces with a single space
                 st_cleaned = re.sub(r"\s+", " ", st_cleaned).strip()
 
-                tt_cleaned = remove_leading_hyphen(tt)
+                tt_cleaned = remove_leading_hyphens(tt)
+                tt_cleaned = remove_leading_underscores(tt_cleaned)
+                tt_cleaned = remove_trailing_underscores(tt_cleaned)
                 tt_cleaned = remove_curly_bracket_tags(tt_cleaned)
                 tt_cleaned = remove_square_bracket_tags(tt_cleaned)
                 # tt_cleaned = remove_parentheses_tags(tt_cleaned)
@@ -159,8 +165,11 @@ def remove_subtitle_items(input_file, output_file, dirty_file=None):
                 if st != st_cleaned or tt != tt_cleaned:
                     time_tag_lines += 1
                     dirty_writer.writerow(row)
-                else:
-                    writer.writerow(row)
+                
+                # Update the row with cleaned text
+                row["ST"] = st_cleaned
+                row["TT"] = tt_cleaned
+                writer.writerow(row)
 
         print(f"Cleaned file saved to {output_file}. Dirty data ({time_tag_lines} lines) saved to {dirty_file}.")
         return time_tag_lines
@@ -256,11 +265,25 @@ def remove_timestamps(input_file, output_file, dirty_file=None):
         print(f"An error occurred: {e}")
 
 
-def remove_leading_hyphen(text):
+def remove_leading_hyphens(text):
     """
     Removes leading hyphens from the given text.
     """
     return re.sub(r'^-+', '', text)
+
+
+def remove_leading_underscores(text):
+    """
+    Removes leading underscores from the given text.
+    """
+    return re.sub(r'^_+', '', text)
+
+
+def remove_trailing_underscores(text):
+    """
+    Removes trailing underscores from the given text.
+    """
+    return re.sub(r'_+$', '', text)
 
 
 def remove_curly_bracket_tags(text):
@@ -473,6 +496,7 @@ def convert_chinese_variants(text, target_variant='simplified', convert_idiom=Fa
     converted_text = cc.convert(text)
     return converted_text
 
+
 def remove_non_cjk_characters(text):
     """
     Removes non-CJK characters from the given text.
@@ -525,13 +549,15 @@ def main():
 
     merge_bilingual_files(st_file, tt_file, merged_file)
 
-    remove_empty_lines(merged_file, "./data/clean/01_cleaned.csv", "./data/dirty/st_dirty.csv", "./data/dirty/tt_dirty.csv")
+    # remove_empty_lines(merged_file, "./data/clean/01_cleaned.csv", "./data/dirty/st_dirty.csv", "./data/dirty/tt_dirty.csv")
 
-    remove_st_in_tt("./data/clean/01_cleaned.csv", "./data/clean/02_st_in _tt_removed.csv", "./data/dirty/bilingual_dirty.csv")
+    remove_st_in_tt(merged_file, "./data/clean/01_st_in _tt_removed.csv", "./data/dirty/bilingual_dirty.csv")
 
-    remove_subtitle_items("./data/clean/02_st_in _tt_removed.csv", "./data/clean/03_subtitle_items_removed.csv", "./data/dirty/ass_tags_dirty.csv")
+    remove_subtitle_items("./data/clean/01_st_in _tt_removed.csv", "./data/clean/02_subtitle_items_removed.csv", "./data/dirty/ass_tags_dirty.csv")
 
-    remove_timestamps("./data/clean/03_subtitle_items_removed.csv", "./data/clean/04_time_tags_removed.csv", "./data/dirty/time_tags_dirty.csv")
+    remove_timestamps("./data/clean/02_subtitle_items_removed.csv", "./data/clean/03_time_tags_removed.csv", "./data/dirty/time_tags_dirty.csv")
+
+    remove_empty_lines("./data/clean/03_time_tags_removed.csv", "./data/clean/04_cleaned.csv", "./data/dirty/st_dirty.csv", "./data/dirty/tt_dirty.csv")
 
     #pre_process_file(merged_file, "preprocessed.csv")
     #remove_duplicate_content("preprocessed.csv", cleaned_file, duplicate_file)
