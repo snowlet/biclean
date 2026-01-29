@@ -263,7 +263,7 @@ def remove_timestamps(input_file, output_file, dirty_file=None):
     
     # Counting lines...
     with open(input_file, 'r', encoding='utf-8') as f:
-        total_rows = sum(1 for _ in f) -1  # Exclude header line
+        total_rows = sum(1 for _ in f) - 1  # Exclude header line
 
     timestamp_lines = 0
     try:
@@ -630,6 +630,14 @@ def main():
     empty_lines_removed = remove_empty_lines(old_clean_file, new_clean_file, dirty_file)
     print(f"Total empty lines removed: {empty_lines_removed:,}")
     print()
+
+    # Counting lines...
+    with open(merged_file, 'r', encoding='utf-8') as source_file,open(new_clean_file, 'r', encoding='utf-8') as final_file:
+        total_rows = sum(1 for _ in source_file) - 1  # Exclude header line
+        final_rows = sum(1 for _ in final_file) - 1  # Exclude header line
+        processed_rows = tc_number + bilingual_lines + timestamp_lines + special_char_lines + duplicate_lines + empty_lines_removed
+        print(f"Total processed lines: {processed_rows:,} / {total_rows:,} ({processed_rows/total_rows:.2%})")
+        print(f"Final bilingual lines: {final_rows:,} / {total_rows:,} ({final_rows/total_rows:.2%})")
 
 
 if __name__ == "__main__":
