@@ -1,88 +1,133 @@
 import csv
+from tqdm import tqdm
+import argparse
 import re
-from pbar import progress_bar
-import time
+  
 
-def merge_bilingual_files(st_file, tt_file, output_file):
-    """
-    Merges two bilingual files (text) into one (.csv).
-    The first file contains the source text (ST) and the second file contains the target text (TT).
-    The output file will be a CSV with three columns: index, ST, TT.
-    The first column is the index, the second column is the source text (ST),
-    and the third column is the target text (TT).
-    TT will be forcibly converted to simplified Chinese.
-    1-based index is used.
-    """
-    try:
-        with open(st_file, "r", encoding="utf-8") as stf, open(tt_file, "r", encoding="utf-8") as ttf, open(output_file, "w", encoding="utf-8", newline='') as outf:
-            st_lines = stf.readlines()
-            tt_lines = ttf.readlines()
+def merge_bilingual_files(st_file, tt_file, merged_file):
+    # Counting lines...
+    with open(st_file, 'r', encoding='utf-8') as f:
+        total_rows = sum(1 for _ in f)
 
-            if len(st_lines) != len(tt_lines):
-                print("Warning: The number of lines in ST and TT files do not match.")
+    with open(st_file, 'r', encoding='utf-8') as st, \
+         open(tt_file, 'r', encoding='utf-8') as tt, \
+         open(merged_file, 'w', newline='', encoding='utf-8') as merged:
+    
+        merged_writer = csv.writer(merged)
+        merged_writer.writerow(['index', 'st', 'tt'])
 
-            writer = csv.writer(outf)
-            writer.writerow(["Index", "ST", "TT"])  # Write header
+        class CommaTqdm(tqdm):
+            @property
+            def format_dict(self):
+                # Get the standard dictionary
+                d = super().format_dict
+                
+                # 1. Format the counter and total with commas
+                d['n_fmt'] = f'{d["n"]:,}'
+                d['total_fmt'] = f'{d["total"]:,}'
+                
+                # 2. Handle the rate (lines/s)
+                # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
+                rate = d.get('rate')
+                if rate is not None:
+                    d['rate_fmt'] = f'{rate:,.2f}'
+                else:
+                    # If rate is None, we can try to calculate it manually based on elapsed time
+                    # or default to '?' if elapsed is 0.
+                    elapsed = d.get('elapsed', 0)
+                    n = d.get('n', 0)
+                    if elapsed > 0:
+                        calc_rate = n / elapsed
+                        d['rate_fmt'] = f'{calc_rate:,.2f}'
+                    else:
+                        d['rate_fmt'] = '?'
+                
+                return d
 
-            # Convert TT lines to simplified Chinese,
-            # as some contain traditional Chinese characters.
-            for tt_line in tt_lines:
-                tt_line = convert_chinese_variants(tt_line, target_variant="simplified", convert_idiom=False)
+        # Define the bar format string
+        bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
 
-            for index, (st_line, tt_line) in enumerate(zip(st_lines, tt_lines), start=1):
-                st_line = remove_special_chars(st_line)
-                tt_line = remove_special_chars(tt_line)
-                writer.writerow([index, st_line.strip(), tt_line.strip()])
+        # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
+        # ensuring the rate has a chance to be calculated and displayed.
+        with CommaTqdm(total=total_rows, 
+                       desc="Merging ST & TT into CSV",
+                       bar_format=bar_fmt,
+                       miniters=1,
+                       mininterval=0.1) as pbar:
+            
+            for index, (st_line, tt_line) in enumerate(zip(st, tt), start=1):
+                st_content = st_line.rstrip('\n')
+                tt_content = tt_line.rstrip('\n')
+                merged_writer.writerow([index, st_content, tt_content])
+                pbar.update(1)
 
-        print(f"Merged file saved to {output_file}")
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    return total_rows
 
 
-def remove_empty_lines(input_file, output_file, dirty_st_file=None, dirty_tt_file=None):
-    """
-    Removes empty lines from the ST and TT columns in the input file (.csv), and saves the cleaned content to the output file (.csv). Uncleaned contents will be saved to dirty_st_file and dirty_tt_file (.csv).
-    Returns the numbers of lines removed.
-    Columns of the .csv files: Index, ST, TT.
-    """
-    lines_st_removed = 0
-    lines_tt_removed = 0
-    lines_removed = 0
-    try:
-        with open(input_file, "r", encoding="utf-8") as infile, \
-             open(output_file, "w", encoding="utf-8", newline='') as outfile, \
-             open(dirty_st_file, "w", encoding="utf-8", newline='') if dirty_st_file else open('/dev/null', 'w') as dirty_st_outfile, \
-             open(dirty_tt_file, "w", encoding="utf-8", newline='') if dirty_tt_file else open('/dev/null', 'w') as dirty_tt_outfile:
-            reader = csv.DictReader(infile)
-            writer = csv.DictWriter(outfile, fieldnames=reader.fieldnames)
-            dirty_st_writer = csv.DictWriter(dirty_st_outfile, fieldnames=reader.fieldnames)
-            dirty_tt_writer = csv.DictWriter(dirty_tt_outfile, fieldnames=reader.fieldnames)
-            writer.writeheader()
-            dirty_st_writer.writeheader()
-            dirty_tt_writer.writeheader()
+def convert_zh_tw_to_zh_cn(input_file, output_file, dirty_file=None):
+    from opencc import OpenCC
+    converter = OpenCC('t2s')  # Traditional Chinese to Simplified Chinese
+    
+    with open(input_file, 'r', encoding='utf-8') as f:
+        total_rows = sum(1 for _ in f) - 1  # Exclude header line
 
+    with open(input_file, 'r', encoding='utf-8') as infile, \
+         open(output_file, 'w', encoding='utf-8', newline='') as outfile, \
+         open(dirty_file, 'a', encoding='utf-8', newline='') if dirty_file else open('/dev/null', 'w') as dirty_outfile:
+        reader = csv.DictReader(infile)
+        writer = csv.DictWriter(outfile, fieldnames=reader.fieldnames)
+        dirty_writer = csv.DictWriter(dirty_outfile, fieldnames=reader.fieldnames)
+        writer.writeheader()
+        dirty_writer.writeheader()
+        tc_number = 0
+
+        class CommaTqdm(tqdm):
+            @property
+            def format_dict(self):
+                # Get the standard dictionary
+                d = super().format_dict
+
+                # 1. Format the counter and total with commas
+                d['n_fmt'] = f'{d["n"]:,}'
+                d['total_fmt'] = f'{d["total"]:,}'
+
+                # 2. Handle the rate (lines/s)
+                # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
+                rate = d.get('rate')
+                if rate is not None:
+                    d['rate_fmt'] = f'{rate:,.2f}'
+                else:
+                    # If rate is None, we can try to calculate it manually based on elapsed time
+                    # or default to '?' if elapsed is 0.
+                    elapsed = d.get('elapsed', 0)
+                    n = d.get('n', 0)
+                    if elapsed > 0:
+                        calc_rate = n / elapsed
+                        d['rate_fmt'] = f'{calc_rate:,.2f}'
+                    else:
+                        d['rate_fmt'] = '?'
+                return d
+
+        # Define the bar format string
+        bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
+
+        # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
+        # ensuring the rate has a chance to be calculated and displayed.
+        with CommaTqdm(total=total_rows,
+                       desc="Converting zh-TW to zh-CN",
+                       bar_format=bar_fmt,
+                       miniters=1,
+                       mininterval=0.1) as pbar:
             for row in reader:
-                if row["ST"].strip() == "" or row["ST"].strip() == "-":
-                    lines_st_removed += 1
-                    dirty_st_writer.writerow(row)
-                    continue
-                elif row["TT"].strip() == "" or row["TT"].strip() == "-":
-                    lines_tt_removed += 1
-                    dirty_tt_writer.writerow(row)
-                    continue
-                writer.writerow(row)
+                tt_content = converter.convert(row["tt"])
+                if row["tt"] != tt_content:
+                    dirty_writer.writerow({"index": row["index"], "st": row["st"], "tt": row["tt"]})
+                    tc_number += 1
+                # After conversion, write to clean file anyway.
+                writer.writerow({"index": row["index"], "st": row["st"], "tt": tt_content})
+                pbar.update(1)
 
-        lines_removed = lines_st_removed + lines_tt_removed
-
-        print(f"Cleaned file saved to {output_file}. Dirty ST data ({lines_st_removed} lines) saved to {dirty_st_file}. Dirty TT data ({lines_tt_removed} lines) saved to {dirty_tt_file}. Total lines removed: {lines_removed}")
-    except FileNotFoundError:
-        print(f"Error: {input_file} not found.")
-    except Exception as e:
-        print(f"An error occurred: {e}")
-
-    return lines_removed
+    return tc_number
 
 
 def remove_st_in_tt(input_file, output_file, dirty_file=None):
@@ -92,6 +137,10 @@ def remove_st_in_tt(input_file, output_file, dirty_file=None):
     The cleaned content is saved to output_file, and the bilingual contents are saved to dirty_file.
     Returns the number of bilingual lines.
     """
+    # Counting lines...
+    with open(input_file, 'r', encoding='utf-8') as f:
+        total_rows = sum(1 for _ in f) - 1  # Exclude header line
+
     bilingual_lines = 0
     try:
         with open(input_file, "r", encoding="utf-8") as infile, \
@@ -101,79 +150,61 @@ def remove_st_in_tt(input_file, output_file, dirty_file=None):
             writer = csv.DictWriter(outfile, fieldnames=reader.fieldnames)
             dirty_writer = csv.DictWriter(dirty_outfile, fieldnames=reader.fieldnames)
             writer.writeheader()
-            dirty_writer.writeheader()
 
-            for row in reader:
-                st = row["ST"].strip()
-                tt = row["TT"].strip()
-                if tt.endswith(st):
-                    bilingual_lines += 1
-                    dirty_writer.writerow(row)
-                    row["TT"] = tt[:-len(st)].strip()
-                writer.writerow(row)
-        print(f"Cleaned file saved to {output_file}. Bilingual data ({bilingual_lines} lines) saved to {dirty_file}.")
+            class CommaTqdm(tqdm):
+                @property
+                def format_dict(self):
+                    # Get the standard dictionary
+                    d = super().format_dict
+
+                    # 1. Format the counter and total with commas
+                    d['n_fmt'] = f'{d["n"]:,}'
+                    d['total_fmt'] = f'{d["total"]:,}'
+
+                    # 2. Handle the rate (lines/s)
+                    # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
+                    rate = d.get('rate')
+                    if rate is not None:
+                        d['rate_fmt'] = f'{rate:,.2f}'
+                    else:
+                        # If rate is None, we can try to calculate it manually based on elapsed time
+                        # or default to '?' if elapsed is 0.
+                        elapsed = d.get('elapsed', 0)
+                        n = d.get('n', 0)
+                        if elapsed > 0:
+                            calc_rate = n / elapsed
+                            d['rate_fmt'] = f'{calc_rate:,.2f}'
+                        else:
+                            d['rate_fmt'] = '?'
+                    return d
+
+            # Define the bar format string
+            bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
+
+            # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
+            # ensuring the rate has a chance to be calculated and displayed.
+            with CommaTqdm(total=total_rows,
+                           desc="Removing ST from TT",
+                           bar_format=bar_fmt,
+                           miniters=1,
+                           mininterval=0.1) as pbar:
+
+                for row in reader:
+                    st = row["st"].strip()
+                    tt = row["tt"].strip()
+                    if tt.endswith(st):
+                        bilingual_lines += 1
+                        dirty_writer.writerow(row)
+                        row["tt"] = tt[:-len(st)].strip()
+                    elif tt.startswith(st):
+                        bilingual_lines += 1
+                        dirty_writer.writerow(row)
+                        row["tt"] = tt[len(st):].strip()
+                    writer.writerow(row)
+
+                    pbar.update(1)
+
         return bilingual_lines
-    except FileNotFoundError:
-        print(f"Error: {input_file} not found.")
-    except Exception as e:
-        print(f"An error occurred: {e}")
-
-
-def remove_subtitle_items(input_file, output_file, dirty_file=None):
-    """
-    Removes .ass tags from the ST/TT column in the input file (.csv), and saves the cleaned content to the output file (.csv). Uncleaned contents will be saved to dirty_file (.csv).
-    .ass tags are quoted by curly brackets, such as {\fs20}, {\fnxxx}, {\an8}.
-    Returns the number of lines with ass tags removed.
-    Columns of the .csv files: Index, ST, TT.
-    """
-    time_tag_lines = 0
-    try:
-        with open(input_file, "r", encoding="utf-8") as infile, \
-             open(output_file, "w", encoding="utf-8", newline='') as outfile, \
-             open(dirty_file, "w", encoding="utf-8", newline='') if dirty_file else open('/dev/null', 'w') as dirty_outfile:
-            reader = csv.DictReader(infile)
-            writer = csv.DictWriter(outfile, fieldnames=reader.fieldnames)
-            dirty_writer = csv.DictWriter(dirty_outfile, fieldnames=reader.fieldnames)
-            writer.writeheader()
-            dirty_writer.writeheader()
-
-            for row in reader:
-                st = row["ST"].strip()
-                tt = row["TT"].strip()
-
-                # Remove subtitle items
-                st_cleaned = remove_leading_hyphens(st)
-                st_cleaned = remove_leading_underscores(st_cleaned)
-                st_cleaned = remove_trailing_underscores(st_cleaned)
-                st_cleaned = remove_curly_bracket_tags(st_cleaned)
-                st_cleaned = remove_square_bracket_tags(st_cleaned)
-                # st_cleaned = remove_parentheses_tags(st_cleaned)
-                st_cleaned = remove_html_tags(st_cleaned)
-                # Replace multiple spaces with a single space
-                st_cleaned = re.sub(r"\s+", " ", st_cleaned).strip()
-
-                tt_cleaned = remove_leading_hyphens(tt)
-                tt_cleaned = remove_leading_underscores(tt_cleaned)
-                tt_cleaned = remove_trailing_underscores(tt_cleaned)
-                tt_cleaned = remove_curly_bracket_tags(tt_cleaned)
-                tt_cleaned = remove_square_bracket_tags(tt_cleaned)
-                # tt_cleaned = remove_parentheses_tags(tt_cleaned)
-                tt_cleaned = remove_html_tags(tt_cleaned)
-                # Replace multiple spaces with a single space
-                tt_cleaned = re.sub(r"\s+", " ", tt_cleaned).strip()
-
-                if st != st_cleaned or tt != tt_cleaned:
-                    time_tag_lines += 1
-                    dirty_writer.writerow(row)
-                
-                # Update the row with cleaned text
-                row["ST"] = st_cleaned
-                row["TT"] = tt_cleaned
-                writer.writerow(row)
-
-        print(f"Cleaned file saved to {output_file}. Dirty data ({time_tag_lines} lines) saved to {dirty_file}.")
-        return time_tag_lines
-
     except FileNotFoundError:
         print(f"Error: {input_file} not found.")
     except Exception as e:
@@ -229,339 +260,377 @@ def remove_timestamps(input_file, output_file, dirty_file=None):
             r'\[(\d{2}:\d{2}:\d{2}[.,]\d{2})\]'
         )
     )
+    
+    # Counting lines...
+    with open(input_file, 'r', encoding='utf-8') as f:
+        total_rows = sum(1 for _ in f) -1  # Exclude header line
 
-    time_tag_lines = 0
+    timestamp_lines = 0
     try:
         with open(input_file, "r", encoding="utf-8") as infile, \
              open(output_file, "w", encoding="utf-8", newline='') as outfile, \
-             open(dirty_file, "w", encoding="utf-8", newline='') if dirty_file else open('/dev/null', 'w') as dirty_outfile:
+             open(dirty_file, "a", encoding="utf-8", newline='') if dirty_file else open('/dev/null', 'w') as dirty_outfile:
             reader = csv.DictReader(infile)
             writer = csv.DictWriter(outfile, fieldnames=reader.fieldnames)
             dirty_writer = csv.DictWriter(dirty_outfile, fieldnames=reader.fieldnames)
             writer.writeheader()
-            dirty_writer.writeheader()
+
+            class CommaTqdm(tqdm):
+                @property
+                def format_dict(self):
+                    # Get the standard dictionary
+                    d = super().format_dict
+                    
+                    # 1. Format the counter and total with commas
+                    d['n_fmt'] = f'{d["n"]:,}'
+                    d['total_fmt'] = f'{d["total"]:,}'
+                    
+                    # 2. Handle the rate (lines/s)
+                    # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
+                    rate = d.get('rate')
+                    if rate is not None:
+                        d['rate_fmt'] = f'{rate:,.2f}'
+                    else:
+                        # If rate is None, we can try to calculate it manually based on elapsed time
+                        # or default to '?' if elapsed is 0.
+                        elapsed = d.get('elapsed', 0)
+                        n = d.get('n', 0)
+                        if elapsed > 0:
+                            calc_rate = n / elapsed
+                            d['rate_fmt'] = f'{calc_rate:,.2f}'
+                        else:
+                            d['rate_fmt'] = '?'
+                    
+                    return d
+
+            # Define the bar format string
+            bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
+
+            # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
+            # ensuring the rate has a chance to be calculated and displayed.
+            with CommaTqdm(total=total_rows, 
+                        desc="Cleaning timestamps from ST & TT",
+                        bar_format=bar_fmt,
+                        miniters=1,
+                        mininterval=0.1) as pbar:
+            
+                for row in reader:
+                    st = row["st"].strip()
+                    tt = row["tt"].strip()
+                    for timestamp_pattern in timestamp_patterns:
+                        st_cleaned = timestamp_pattern.sub("", st)
+                        tt_cleaned = timestamp_pattern.sub("", tt)
+                        st_cleaned = re.sub(r'\s{2,}', ' ', st_cleaned).strip()
+                        tt_cleaned = re.sub(r'\s{2,}', ' ', tt_cleaned).strip()
+
+                    if st != st_cleaned or tt != tt_cleaned:
+                        timestamp_lines += 1
+                        dirty_writer.writerow(row)
+                    # After cleaning, write to clean file anyway.
+                    writer.writerow(row)
+
+                    pbar.update(1)
+
+        return timestamp_lines
+
+    except FileNotFoundError:
+        print(f"Error: {input_file} not found.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+
+def remove_special_characters(input_file, output_file, dirty_file=None):
+    """
+    Removes special characters from the ST/TT column in the input file (.csv), and saves the cleaned content to the output file (.csv). Uncleaned contents will be saved to dirty_file (.csv).
+    """
+    # Counting lines...
+    with open(input_file, 'r', encoding='utf-8') as f:
+        total_rows = sum(1 for _ in f) - 1  # Exclude header line
+    
+    special_char_lines = 0
+    try:
+        with open(input_file, "r", encoding="utf-8") as infile, \
+             open(output_file, "w", encoding="utf-8", newline='') as outfile, \
+             open(dirty_file, "a", encoding="utf-8", newline='') if dirty_file else open('/dev/null', 'w') as dirty_outfile:
+            reader = csv.DictReader(infile)
+            writer = csv.DictWriter(outfile, fieldnames=reader.fieldnames)
+            dirty_writer = csv.DictWriter(dirty_outfile, fieldnames=reader.fieldnames)
+            writer.writeheader()
+
+            class CommaTqdm(tqdm):
+                @property
+                def format_dict(self):
+                    # Get the standard dictionary
+                    d = super().format_dict
+
+                    # 1. Format the counter and total with commas
+                    d['n_fmt'] = f'{d["n"]:,}'
+                    d['total_fmt'] = f'{d["total"]:,}'
+
+                    # 2. Handle the rate (lines/s)
+                    # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
+                    rate = d.get('rate')
+                    if rate is not None:
+                        d['rate_fmt'] = f'{rate:,.2f}'
+                    else:
+                        # If rate is None, we can try to calculate it manually based on elapsed time
+                        # or default to '?' if elapsed is 0.
+                        elapsed = d.get('elapsed', 0)
+                        n = d.get('n', 0)
+                        if elapsed > 0:
+                            calc_rate = n / elapsed
+                            d['rate_fmt'] = f'{calc_rate:,.2f}'
+                        else:
+                            d['rate_fmt'] = '?'
+                    return d
+
+            # Define the bar format string
+            bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
+
+            # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
+            # ensuring the rate has a chance to be calculated and displayed.
+            with CommaTqdm(total=total_rows,
+                           desc="Cleaning special characters",
+                           bar_format=bar_fmt,
+                           miniters=1,
+                           mininterval=0.1) as pbar:
+                
+                for row in reader:
+                    st = re.sub(r'[\u200E\u202A\u202B\u202C\u202D\u202E\u2028\u2029\u00b6\u00a7\u0640\u200e]', '', row['st'])
+                    tt = re.sub(r'[\u200E\u202A\u202B\u202C\u202D\u202E\u2028\u2029\u00b6\u00a7\u0640\u200e]', '', row['tt'])
+
+                    # Replace various dash characters with standard hyphen-minus
+                    # U+2013 = - = En Dash
+                    # U+2014 = -- = Em Dash
+                    st = re.sub(r'[\u2013\u2014]', '-', st)
+                    tt = re.sub(r'[\u2013\u2014]', '-', tt)
+
+                    # Replace various single quote characters with standard apostrophe
+                    # U+2018 = ‘ = Left Single Quotation Mark
+                    # U+2019 = ’ = Right Single Quotation Mark
+                    # U+201A = ‚ = Single Low-9 Quotation Mark
+                    # U+201B = ‛ = Single High-Reversed-9 Quotation Mark
+                    # U+2032 = ′ = Prime
+                    # U+2035 = ‵ = Reversed Prime
+                    st = re.sub(r'[\u2018\u2019\u201A\u201B\u2032\u2035]', "'", st)
+                    tt = re.sub(r'[\u2018\u2019\u201A\u201B\u2032\u2035]', "'", tt)
+
+                    # Replace various double quote characters with standard quotation mark
+                    # U+201C = “ = Left Double Quotation Mark
+                    # U+201D = ” = Right Double Quotation Mark
+                    # U+201E = „ = Double Low-9 Quotation Mark
+                    # U+201F = ‟ = Double High-Reversed-9 Quotation Mark
+                    # U+2033 = ″ = Double Prime
+                    # U+2036 = ‶ = Reversed Double Prime
+                    st = re.sub(r'[\u201C\u201D\u201E\u201F\u2033\u2036]', '"', st)
+                    tt = re.sub(r'[\u201C\u201D\u201E\u201F\u2033\u2036]', '"', tt)
+
+                    # Replace U+3000 (Ideographic Space) with standard space
+                    st = st.replace('\u3000', ' ')
+                    tt = tt.replace('\u3000', ' ')
+
+                    if row['st'] != st or row['tt'] != tt:
+                        dirty_writer.writerow(row)
+                        special_char_lines += 1
+                    # All fixed; write to clean file anyway.
+                    writer.writerow(row)
+
+                    pbar.update(1)
+
+        return special_char_lines
+    except FileNotFoundError:
+        print(f"Error: {input_file} not found.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+
+def remove_duplicates(input_file, output_file, dirty_file=None):
+    # Counting lines...
+    with open(input_file, 'r', encoding='utf-8') as f:
+        total_rows = sum(1 for _ in f) - 1  # Exclude header line
+
+    with open(input_file, 'r', encoding='utf-8') as infile, \
+         open(output_file, 'w', newline='', encoding='utf-8') as outfile, \
+         (open(dirty_file, 'a', newline='', encoding='utf-8') if dirty_file else open('/dev/null', 'w')) as dirty_outfile:
+        reader = csv.reader(infile)
+        writer = csv.writer(outfile)
+        dirty_writer = csv.writer(dirty_outfile)
+        
+        duplicate_lines = 0
+
+        class CommaTqdm(tqdm):
+            @property
+            def format_dict(self):
+                # Get the standard dictionary
+                d = super().format_dict
+
+                # 1. Format the counter and total with commas
+                d['n_fmt'] = f'{d["n"]:,}'
+                d['total_fmt'] = f'{d["total"]:,}'
+
+                # 2. Handle the rate (lines/s)
+                # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
+                rate = d.get('rate')
+                if rate is not None:
+                    d['rate_fmt'] = f'{rate:,.2f}'
+                else:
+                    # If rate is None, we can try to calculate it manually based on elapsed time
+                    # or default to '?' if elapsed is 0.
+                    elapsed = d.get('elapsed', 0)
+                    n = d.get('n', 0)
+                    if elapsed > 0:
+                        calc_rate = n / elapsed
+                        d['rate_fmt'] = f'{calc_rate:,.2f}'
+                    else:
+                        d['rate_fmt'] = '?'
+
+                return d
+
+        # Define the bar format string
+        bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
+
+        # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
+        # ensuring the rate has a chance to be calculated and displayed.
+        with CommaTqdm(total=total_rows,
+                       desc="Removing duplicates",
+                       bar_format=bar_fmt,
+                       miniters=1,
+                       mininterval=0.1) as pbar:
 
             for row in reader:
-                st = row["ST"].strip()
-                tt = row["TT"].strip()
-                for timestamp_pattern in timestamp_patterns:
-                    st_cleaned = timestamp_pattern.sub("", st)
-                    tt_cleaned = timestamp_pattern.sub("", tt)
-                    st_cleaned = re.sub(r'\s{2,}', ' ', st_cleaned).strip()
-                    tt_cleaned = re.sub(r'\s{2,}', ' ', tt_cleaned).strip()
-
-                if st != st_cleaned or tt != tt_cleaned:
-                    time_tag_lines += 1
+                if row[1] == row[2]:
                     dirty_writer.writerow(row)
+                    duplicate_lines += 1
                 else:
                     writer.writerow(row)
 
-        print(f"Cleaned file saved to {output_file}. Dirty data ({time_tag_lines} lines) saved to {dirty_file}.")
-        return time_tag_lines
+                pbar.update(1)
 
-    except FileNotFoundError:
-        print(f"Error: {input_file} not found.")
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    return duplicate_lines
 
 
-def remove_leading_hyphens(text):
-    """
-    Removes leading hyphens from the given text.
-    """
-    return re.sub(r'^-+', '', text)
+def remove_empty_lines(input_file, output_file, dirty_file=None):
+    with open(input_file, 'r', encoding='utf-8') as infile:
+        total_rows = sum(1 for _ in infile) -1  # Exclude header line
+    with open(input_file, 'r', encoding='utf-8') as infile, \
+         open(output_file, 'w', newline='', encoding='utf-8') as outfile, \
+         (open(dirty_file, 'a', newline='', encoding='utf-8') if dirty_file else open('/dev/null', 'w')) as dirty_outfile:
+        reader = csv.reader(infile)
+        writer = csv.writer(outfile)
+        dirty_writer = csv.writer(dirty_outfile)
+        empty_lines = 0
+        
+        class CommaTqdm(tqdm):
+            @property
+            def format_dict(self):
+                # Get the standard dictionary
+                d = super().format_dict
 
+                # 1. Format the counter and total with commas
+                d['n_fmt'] = f'{d["n"]:,}'
+                d['total_fmt'] = f'{d["total"]:,}'
 
-def remove_leading_underscores(text):
-    """
-    Removes leading underscores from the given text.
-    """
-    return re.sub(r'^_+', '', text)
+                # 2. Handle the rate (lines/s)
+                # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
+                rate = d.get('rate')
+                if rate is not None:
+                    d['rate_fmt'] = f'{rate:,.2f}'
+                else:
+                    # If rate is None, we can try to calculate it manually based on elapsed time
+                    # or default to '?' if elapsed is 0.
+                    elapsed = d.get('elapsed', 0)
+                    n = d.get('n', 0)
+                    if elapsed > 0:
+                        calc_rate = n / elapsed
+                        d['rate_fmt'] = f'{calc_rate:,.2f}'
+                    else:
+                        d['rate_fmt'] = '?'
 
+                return d
 
-def remove_trailing_underscores(text):
-    """
-    Removes trailing underscores from the given text.
-    """
-    return re.sub(r'_+$', '', text)
+        # Define the bar format string
+        bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
 
+        # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
+        # ensuring the rate has a chance to be calculated and displayed.
+        with CommaTqdm(total=total_rows,
+                       desc="Checking empty lines",
+                       bar_format=bar_fmt,
+                       miniters=1,
+                       mininterval=0.1) as pbar:
 
-def remove_curly_bracket_tags(text):
-    """
-    Removes .ass tags from the given text.
-    Anything inside the curly bracket should be removed. The curly brackets should be removed, too.
-    """
-    return re.sub(r"\{.*?\}", "", text)
+            for row in reader:
+                if row[1] != '' and row[2] != '':
+                    writer.writerow(row)
+                else:
+                    dirty_writer.writerow(row)
+                    empty_lines += 1
 
+                pbar.update(1)
 
-def remove_square_bracket_tags(text):
-    """
-    Removes .ass tags from the given text.
-    Anything inside the curly bracket should be removed. The curly brackets should be removed, too.
-    """
-    return re.sub(r"\[.*?\]", "", text)
-
-
-def remove_parentheses_tags(text):
-    """
-    Removes .ass tags from the given text.
-    Anything inside the parentheses should be removed. The parentheses should be removed, too.
-    """
-    return re.sub(r"\([^)]*\)", "", text)
-
-
-def remove_html_tags(text):
-    """
-    Removes HTML tags from the given text.
-    """
-    return re.sub(r'<[^>]*>', '', text)
-
-
-def count_lines(path: str) -> int:
-    """
-    Counts the number of lines in a file.
-    """
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        return sum(1 for _ in f)
-   
-
-def pre_process_file(input_file, output_file):
-    """
-    Processes the input file by removing special characters and saves the cleaned content to the output file.
-    """
-    try:
-        with open(input_file, "r", encoding="utf-8") as infile, open(output_file, "w", encoding="utf-8") as outfile:
-            for line in infile:
-                cleaned_line = remove_special_chars(line)
-                outfile.write(cleaned_line)
-        print(f"Processed file saved to {output_file}")
-    except FileNotFoundError:
-        print(f"Error: {input_file} not found.")
-    except Exception as e:
-        print(f"An error occurred: {e}")
-
-
-def remove_duplicate_content(input_file, output_file_clean, output_file_duplicate):
-    """
-    Removes rows where the third column (TT) is the same as the second column (ST) and writes them to separate files.
-    """
-
-    data_total = count_lines(input_file) - 1 # exclude header
-    data_idx = 1
-    start_time = time.time()
-
-    print("Removing duplicate content...")
-
-    with open(input_file, mode='r', encoding='utf-8') as infile, \
-        open(output_file_clean, mode='w', encoding='utf-8', newline='') as outfile_1, \
-        open(output_file_duplicate, mode='w', encoding='utf-8', newline='') as outfile_2:
-        reader = csv.DictReader(infile)
-        writer_clean = csv.DictWriter(outfile_1, fieldnames=reader.fieldnames)
-        writer_duplicate = csv.DictWriter(outfile_2, fieldnames=reader.fieldnames)
-        writer_clean.writeheader()
-        writer_duplicate.writeheader()
-
-        for row in reader:
-            progress_bar(data_idx, data_total, start_time=start_time)
-            if row[reader.fieldnames[2]] == row[reader.fieldnames[1]]:
-                writer_duplicate.writerow(row)
-            else:
-                writer_clean.writerow(row)
-            data_idx += 1
-
-
-def remove_bilingual_content(input_file, output_file_clean, output_file_bilingual):
-    """
-    Removes ST (from the second column) that exists at the beginning or the end of the third column (TT).
-    These rows imply bilingual content and are cleaned from the TT.
-    """
-
-    data_total = count_lines(input_file) - 1 # exclude header
-    data_idx = 1
-    start_time = time.time()
-
-    print("Removing bilingual content...")
-
-    with open(input_file, mode='r', encoding='utf-8') as infile, \
-        open(output_file_clean, mode='w', encoding='utf-8', newline='') as outfile_clean, \
-        open(output_file_bilingual, mode='w', encoding='utf-8', newline='') as outfile_bilingual:
-        reader = csv.DictReader(infile)
-        writer_clean = csv.DictWriter(outfile_clean, fieldnames=reader.fieldnames)
-        writer_bilingual = csv.DictWriter(outfile_bilingual, fieldnames=reader.fieldnames)
-        writer_clean.writeheader()
-        writer_bilingual.writeheader()
-
-        for row in reader:
-            progress_bar(data_idx, data_total, start_time=start_time)
-            col2 = row[reader.fieldnames[1]]
-            col3 = row[reader.fieldnames[2]]
-            if col3.endswith(col2):
-                writer_bilingual.writerow(row)
-                row[reader.fieldnames[2]] = col3[:-len(col2)]
-                writer_clean.writerow(row)
-            elif col3.startswith(col2):
-                writer_bilingual.writerow(row)
-                row[reader.fieldnames[2]] = col3[len(col2):]
-                writer_clean.writerow(row)
-            else:
-                writer_clean.writerow(row)
-            data_idx += 1
-
-
-def remove_special_chars(text):
-    """
-    Removes specified special characters from a given text.
-    """
-    # Removes special characters such as U+200E, U+202A, U+202C from the fields.
-    # U+200E = Left-to-Right Mark (LRM)
-    # U+202A = Left-to-Right Embedding (LRE)
-    # U+202B = Right-to-Left Embedding (RLE)
-    # U+202C = Pop Directional Formatting (PDF)
-    # U+202D = Left-to-Right Override (LRO)
-    # U+202E = Right-to-Left Override (RLO)
-    chars = ["\u200e", "\u202a", "\u202b", "\u202c", "\u202d", "\u202e", "lrm;", "lre;", "rle;", "pdf;", "lro;", "rlo;"]
-    for char in chars:
-        text = text.replace(char, "")
-
-    # Remove other unwanted characters
-    # U+2018 = ' = Left Single Quotation Mark
-    # U+2019 = ' = Right Single Quotation Mark
-    # U+201A = ' = Single Low-9 Quotation Mark
-    # U+201B = ' = Single High-Reversed-9 Quotation Mark
-    # U+2032 = ' = Prime
-    # U+2035 = ' = Reversed Prime
-    chars = ["\u2018", "\u2019", "\u201a", "\u201b", "\u2032", "\u2035"]
-    for char in chars:
-        text = text.replace(char, "'")
-
-    # U+201C = " = Left Double Quotation Mark
-    # U+201D = " = Right Double Quotation Mark
-    # U+201E = " = Double Low-9 Quotation Mark
-    # U+201F = " = Double High-Reversed-9 Quotation Mark
-    # U+2033 = " = Double Prime
-    # U+2036 = " = Reversed Double Prime
-    chars = ["\u201c", "\u201d", "\u201e", "\u201f", "\u2033", "\u2036"]
-    for char in chars:
-        text = text.replace(char, '"')
-    
-    # U+2013 = - = En Dash
-    text = text.replace("\u2013", "-")
-    
-    # U+2014 = -- = Em Dash
-    text = text.replace("\u2014", "-")
-
-    # U+2026 = ... = Horizontal Ellipsis
-    # text = text.replace("\u2026", "...")
-    
-    # U+2028 = \n = Line Separator
-    # U+2029 = \n = Paragraph Separator
-    chars = ["\u2028", "\u2029"]
-    for char in chars:
-        text = text.replace(char, "\n")
-    
-    # U+00B6 = ¶ = Pilcrow Sign
-    # U+00A7 = § = Section Sign
-    text = text.replace("\u00b6", "")
-    text = text.replace("\u00a7", "")
-
-    # U+0640 = ـ = Arabic Tatweel
-    text = text.replace("\u0640", "")
-
-    # U+3000 =  = Ideographic Space
-    # text = text.replace("\u3000", " ")
-
-    return text
-
-
-def convert_chinese_variants(text, target_variant='simplified', convert_idiom=False):
-    """
-    Converts Chinese text between Simplified and Traditional variants.
-    target_variant: 'simplified' or 'traditional'
-    convert_idiom: whether to convert idioms
-    """
-    try:
-        from opencc import OpenCC
-    except ImportError:
-        print("Error: opencc module not found. Please install it using 'pip install opencc-python-reimplemented'.")
-        return text
-
-    if target_variant == 'simplified':
-        cc = OpenCC('tw2sp.json' if convert_idiom else 't2s.json')
-    elif target_variant == 'traditional':
-        cc = OpenCC('s2twp.json' if convert_idiom else 's2t.json')
-    else:
-        print("Error: target_variant must be either 'simplified' or 'traditional'.")
-        return text
-
-    converted_text = cc.convert(text)
-    return converted_text
-
-
-def remove_non_cjk_characters(text):
-    """
-    Removes non-CJK characters from the given text.
-    """
-    cleaned_text = ''.join(char for char in text if is_cjk_character(char))
-    return cleaned_text
-
-
-def is_cjk_character(char: str) -> bool:
-    """
-    Checks if a character is a CJK character.
-    """
-    return any([
-        '\u4E00' <= char <= '\u9FFF',  # CJK Unified Ideographs
-        '\u3400' <= char <= '\u4DBF',  # CJK Unified Ideographs Extension A
-        '\u20000' <= char <= '\u2A6DF',  # CJK Unified Ideographs Extension B
-        '\u2A700' <= char <= '\u2B73F',  # CJK Unified Ideographs Extension C
-        '\u2B740' <= char <= '\u2B81F',  # CJK Unified Ideographs Extension D
-        '\u2B820' <= char <= '\u2CEAF',  # CJK Unified Ideographs Extension E
-        '\uF900' <= char <= '\uFAFF',  # CJK Compatibility Ideographs
-        '\u2F800' <= char <= '\u2FA1F',  # CJK Compatibility Ideographs Supplement
-        '\u3040' <= char <= '\u309F',  # Hiragana
-        '\u30A0' <= char <= '\u30FF',  # Katakana
-        '\u31F0' <= char <= '\u31FF',  # Katakana Phonetic Extensions
-        '\uAC00' <= char <= '\uD7AF',  # Hangul Syllables
-        '\u1100' <= char <= '\u11FF',  # Hangul Jamo
-        '\u3130' <= char <= '\u318F',  # Hangul Compatibility Jamo
-    ])
-
-
-def if_contain_cjk(text):
-    """
-    Checks if the text contains any CJK characters.
-    """
-    return any(is_cjk_character(char) for char in text)
+    return empty_lines
 
 
 def main():
-    """
-    Main function to execute the script.
-    """
-    # Example usage
-    # Both st_file and tt_file below are examples from OpenSubtitles2024 dataset.
-    st_file = "./data/raw/OpenSubtitles.en-zh_CN.en-100k"
-    tt_file = "./data/raw/OpenSubtitles.en-zh_CN.zh_CN-100k"
-    merged_file = "./data/raw/merged_raw.csv"
-    cleaned_file = "cleaned.csv"
-    duplicate_file = "duplicates.csv"
-    bilingual_file = "bilingual.csv"
+    parser = argparse.ArgumentParser(description="Merge bilingual files (pure texts) to CSV.")
+    parser.add_argument("--st", required=True, help="Path to the ST file.")
+    parser.add_argument("--tt", required=True, help="Path to the TT file.")
+    parser.add_argument("--output", required=True, help="Path to the output merged CSV file.")
+    parser.add_argument("--dirty", required=False, help="Path to the dirty file.")
 
-    merge_bilingual_files(st_file, tt_file, merged_file)
+    args = parser.parse_args()
 
-    # remove_empty_lines(merged_file, "./data/clean/01_cleaned.csv", "./data/dirty/st_dirty.csv", "./data/dirty/tt_dirty.csv")
+    st_file = args.st
+    tt_file = args.tt
+    merged_file = args.output
+    dirty_file = args.dirty
 
-    remove_st_in_tt(merged_file, "./data/clean/01_st_in _tt_removed.csv", "./data/dirty/bilingual_dirty.csv")
+    # 1. Merge bilingual files from pure text to CSV.
+    total_rows = merge_bilingual_files(st_file, tt_file, merged_file)
+    print(f"Total ST & TT merged into CSV: {total_rows:,}")
+    print()
 
-    remove_subtitle_items("./data/clean/01_st_in _tt_removed.csv", "./data/clean/02_subtitle_items_removed.csv", "./data/dirty/ass_tags_dirty.csv")
+    # 2. Convert Traditional Chinese to Simplified Chinese in the merged CSV.
+    new_clean_file = "./data/clean/01_zh_tw_to_zh_cn.csv"
+    tc_number = convert_zh_tw_to_zh_cn(merged_file, new_clean_file, dirty_file)
+    print(f"Total Traditional Chinese lines converted: {tc_number:,}")
+    print()
 
-    remove_timestamps("./data/clean/02_subtitle_items_removed.csv", "./data/clean/03_time_tags_removed.csv", "./data/dirty/time_tags_dirty.csv")
+    # 3. Remove ST in TT from the merged CSV.
+    old_clean_file = new_clean_file
+    new_clean_file = "./data/clean/02_no_st_in_tt.csv"
+    bilingual_lines = remove_st_in_tt(old_clean_file, new_clean_file, dirty_file)
+    print(f"Total bilingual lines cleaned: {bilingual_lines:,}")
+    print()
 
-    remove_empty_lines("./data/clean/03_time_tags_removed.csv", "./data/clean/04_cleaned.csv", "./data/dirty/st_dirty.csv", "./data/dirty/tt_dirty.csv")
+    # 4. Remove timestamps from the merged CSV.
+    old_clean_file = new_clean_file
+    new_clean_file = "./data/clean/03_no_timestamps.csv"
+    timestamp_lines = remove_timestamps(old_clean_file, new_clean_file, dirty_file)
+    print(f"Total timestamp lines cleaned: {timestamp_lines:,}")
+    print()
 
-    #pre_process_file(merged_file, "preprocessed.csv")
-    #remove_duplicate_content("preprocessed.csv", cleaned_file, duplicate_file)
-    #remove_bilingual_content(cleaned_file, "final_cleaned.csv", bilingual_file)
+    # 5. Remove special characters from the merged CSV.
+    old_clean_file = new_clean_file
+    new_clean_file = "./data/clean/04_no_special_chars.csv"
+    special_char_lines = remove_special_characters(old_clean_file, new_clean_file, dirty_file)
+    print(f"Total special character lines cleaned: {special_char_lines:,}")
+    print()
+
+    # 6. Remove duplicate contents from the merged CSV.
+    old_clean_file = new_clean_file
+    new_clean_file = "./data/clean/05_no_duplicates.csv"
+    duplicate_lines = remove_duplicates(old_clean_file, new_clean_file, dirty_file)
+    print(f"Total duplicate lines removed: {duplicate_lines:,}")
+    print()
+
+    # 9. Remove empty lines from the merged CSV.
+    old_clean_file = new_clean_file
+    new_clean_file = "./data/clean/09_no_empty_lines.csv"
+    empty_lines_removed = remove_empty_lines(old_clean_file, new_clean_file, dirty_file)
+    print(f"Total empty lines removed: {empty_lines_removed:,}")
+    print()
+
 
 if __name__ == "__main__":
     main()
