@@ -2,6 +2,7 @@ import csv
 from tqdm import tqdm
 import argparse
 import re
+import shutil
   
 
 def merge_bilingual_files(st_file, tt_file, merged_file):
@@ -584,60 +585,58 @@ def main():
     tt_file = args.tt
     merged_file = args.output
     dirty_file = args.dirty
+    tmp_file = "./data/tmp.csv"
 
     # 1. Merge bilingual files from pure text to CSV.
-    total_rows = merge_bilingual_files(st_file, tt_file, merged_file)
+    total_rows = merge_bilingual_files(st_file, tt_file, tmp_file)
+    shutil.copy(tmp_file, merged_file)
     print(f"Total ST & TT merged into CSV: {total_rows:,}")
     print()
 
     # 2. Convert Traditional Chinese to Simplified Chinese in the merged CSV.
-    new_clean_file = "./data/clean/01_zh_tw_to_zh_cn.csv"
-    tc_number = convert_zh_tw_to_zh_cn(merged_file, new_clean_file, dirty_file)
+    # new_clean_file = "./data/clean/01_zh_tw_to_zh_cn.csv"
+    tc_number = convert_zh_tw_to_zh_cn(merged_file, tmp_file, dirty_file)
+    shutil.copy(tmp_file, merged_file)
     print(f"Total Traditional Chinese lines converted: {tc_number:,}")
     print()
 
     # 3. Remove ST in TT from the merged CSV.
-    old_clean_file = new_clean_file
-    new_clean_file = "./data/clean/02_no_st_in_tt.csv"
-    bilingual_lines = remove_st_in_tt(old_clean_file, new_clean_file, dirty_file)
+    bilingual_lines = remove_st_in_tt(merged_file, tmp_file, dirty_file)
+    shutil.copy(tmp_file, merged_file)
     print(f"Total bilingual lines cleaned: {bilingual_lines:,}")
     print()
 
     # 4. Remove timestamps from the merged CSV.
-    old_clean_file = new_clean_file
-    new_clean_file = "./data/clean/03_no_timestamps.csv"
-    timestamp_lines = remove_timestamps(old_clean_file, new_clean_file, dirty_file)
+    timestamp_lines = remove_timestamps(merged_file, tmp_file, dirty_file)
+    shutil.copy(tmp_file, merged_file)
     print(f"Total timestamp lines cleaned: {timestamp_lines:,}")
     print()
 
     # 5. Remove special characters from the merged CSV.
-    old_clean_file = new_clean_file
-    new_clean_file = "./data/clean/04_no_special_chars.csv"
-    special_char_lines = remove_special_characters(old_clean_file, new_clean_file, dirty_file)
+    special_char_lines = remove_special_characters(merged_file, tmp_file, dirty_file)
+    shutil.copy(tmp_file, merged_file)
     print(f"Total special character lines cleaned: {special_char_lines:,}")
     print()
 
     # 6. Remove duplicate contents from the merged CSV.
-    old_clean_file = new_clean_file
-    new_clean_file = "./data/clean/05_no_duplicates.csv"
-    duplicate_lines = remove_duplicates(old_clean_file, new_clean_file, dirty_file)
+    duplicate_lines = remove_duplicates(merged_file, tmp_file, dirty_file)
+    shutil.copy(tmp_file, merged_file)
     print(f"Total duplicate lines removed: {duplicate_lines:,}")
     print()
 
-    # 9. Remove empty lines from the merged CSV.
-    old_clean_file = new_clean_file
-    new_clean_file = "./data/clean/09_no_empty_lines.csv"
-    empty_lines_removed = remove_empty_lines(old_clean_file, new_clean_file, dirty_file)
+    # 7. Remove empty lines from the merged CSV.
+    empty_lines_removed = remove_empty_lines(merged_file, tmp_file, dirty_file)
+    shutil.move(tmp_file, merged_file)
     print(f"Total empty lines removed: {empty_lines_removed:,}")
     print()
 
-    # Counting lines...
-    with open(merged_file, 'r', encoding='utf-8') as source_file,open(new_clean_file, 'r', encoding='utf-8') as final_file:
-        total_rows = sum(1 for _ in source_file) - 1  # Exclude header line
+    # Final report
+    with open(merged_file, 'r', encoding='utf-8') as final_file:
         final_rows = sum(1 for _ in final_file) - 1  # Exclude header line
         processed_rows = tc_number + bilingual_lines + timestamp_lines + special_char_lines + duplicate_lines + empty_lines_removed
         print(f"Total processed lines: {processed_rows:,} / {total_rows:,} ({processed_rows/total_rows:.2%})")
         print(f"Final bilingual lines: {final_rows:,} / {total_rows:,} ({final_rows/total_rows:.2%})")
+        print()
 
 
 if __name__ == "__main__":
