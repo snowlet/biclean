@@ -15,6 +15,8 @@ To use the biclean cleaning tools, you will need to install the following depend
 
 You can install the dependencies using pip:
 
+`python -m pip install csv tqdm argparse re opencc-python-reimplemented`
+
 ## Usage
 Usage: `python biclean.py [-h] --st ST --tt TT --output OUTPUT [--dirty DIRTY]`
 
