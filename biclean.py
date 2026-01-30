@@ -3,7 +3,53 @@ from tqdm import tqdm
 import argparse
 import re
 import shutil
-  
+
+
+class CommaTqdm(tqdm):
+    """
+    A custom tqdm class that formats numbers with commas and handles rate display.
+    Refactored to be a global class to avoid code duplication.
+    """
+    def __init__(self, *args, **kwargs):
+        # Set default bar_format if not provided
+        if 'bar_format' not in kwargs:
+            kwargs['bar_format'] = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
+        
+        # Set default miniters and mininterval to force updates
+        if 'miniters' not in kwargs:
+            kwargs['miniters'] = 1
+        if 'mininterval' not in kwargs:
+            kwargs['mininterval'] = 0.1
+            
+        super().__init__(*args, **kwargs)
+
+    @property
+    def format_dict(self):
+        # Get the standard dictionary
+        d = super().format_dict
+        
+        # 1. Format the counter and total with commas
+        d['n_fmt'] = f'{d["n"]:,}'
+        d['total_fmt'] = f'{d["total"]:,}'
+        
+        # 2. Handle the rate (lines/s)
+        # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
+        rate = d.get('rate')
+        if rate is not None:
+            d['rate_fmt'] = f'{rate:,.2f}'
+        else:
+            # If rate is None, we can try to calculate it manually based on elapsed time
+            # or default to '?' if elapsed is 0.
+            elapsed = d.get('elapsed', 0)
+            n = d.get('n', 0)
+            if elapsed > 0:
+                calc_rate = n / elapsed
+                d['rate_fmt'] = f'{calc_rate:,.2f}'
+            else:
+                d['rate_fmt'] = '?'
+        
+        return d
+
 
 def merge_bilingual_files(st_file, tt_file, merged_file):
     # Counting lines...
@@ -17,45 +63,7 @@ def merge_bilingual_files(st_file, tt_file, merged_file):
         merged_writer = csv.writer(merged)
         merged_writer.writerow(['index', 'st', 'tt'])
 
-        class CommaTqdm(tqdm):
-            @property
-            def format_dict(self):
-                # Get the standard dictionary
-                d = super().format_dict
-                
-                # 1. Format the counter and total with commas
-                d['n_fmt'] = f'{d["n"]:,}'
-                d['total_fmt'] = f'{d["total"]:,}'
-                
-                # 2. Handle the rate (lines/s)
-                # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
-                rate = d.get('rate')
-                if rate is not None:
-                    d['rate_fmt'] = f'{rate:,.2f}'
-                else:
-                    # If rate is None, we can try to calculate it manually based on elapsed time
-                    # or default to '?' if elapsed is 0.
-                    elapsed = d.get('elapsed', 0)
-                    n = d.get('n', 0)
-                    if elapsed > 0:
-                        calc_rate = n / elapsed
-                        d['rate_fmt'] = f'{calc_rate:,.2f}'
-                    else:
-                        d['rate_fmt'] = '?'
-                
-                return d
-
-        # Define the bar format string
-        bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
-
-        # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
-        # ensuring the rate has a chance to be calculated and displayed.
-        with CommaTqdm(total=total_rows, 
-                       desc="Merging ST & TT into CSV",
-                       bar_format=bar_fmt,
-                       miniters=1,
-                       mininterval=0.1) as pbar:
-            
+        with CommaTqdm(total=total_rows, desc="Merging ST & TT into CSV") as pbar:
             for index, (st_line, tt_line) in enumerate(zip(st, tt), start=1):
                 st_content = st_line.rstrip('\n')
                 tt_content = tt_line.rstrip('\n')
@@ -82,43 +90,7 @@ def convert_zh_tw_to_zh_cn(input_file, output_file, dirty_file=None):
         dirty_writer.writeheader()
         tc_number = 0
 
-        class CommaTqdm(tqdm):
-            @property
-            def format_dict(self):
-                # Get the standard dictionary
-                d = super().format_dict
-
-                # 1. Format the counter and total with commas
-                d['n_fmt'] = f'{d["n"]:,}'
-                d['total_fmt'] = f'{d["total"]:,}'
-
-                # 2. Handle the rate (lines/s)
-                # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
-                rate = d.get('rate')
-                if rate is not None:
-                    d['rate_fmt'] = f'{rate:,.2f}'
-                else:
-                    # If rate is None, we can try to calculate it manually based on elapsed time
-                    # or default to '?' if elapsed is 0.
-                    elapsed = d.get('elapsed', 0)
-                    n = d.get('n', 0)
-                    if elapsed > 0:
-                        calc_rate = n / elapsed
-                        d['rate_fmt'] = f'{calc_rate:,.2f}'
-                    else:
-                        d['rate_fmt'] = '?'
-                return d
-
-        # Define the bar format string
-        bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
-
-        # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
-        # ensuring the rate has a chance to be calculated and displayed.
-        with CommaTqdm(total=total_rows,
-                       desc="Converting zh-TW to zh-CN",
-                       bar_format=bar_fmt,
-                       miniters=1,
-                       mininterval=0.1) as pbar:
+        with CommaTqdm(total=total_rows, desc="Converting zh-TW to zh-CN") as pbar:
             for row in reader:
                 tt_content = converter.convert(row["tt"])
                 if row["tt"] != tt_content:
@@ -152,44 +124,7 @@ def remove_st_in_tt(input_file, output_file, dirty_file=None):
             dirty_writer = csv.DictWriter(dirty_outfile, fieldnames=reader.fieldnames)
             writer.writeheader()
 
-            class CommaTqdm(tqdm):
-                @property
-                def format_dict(self):
-                    # Get the standard dictionary
-                    d = super().format_dict
-
-                    # 1. Format the counter and total with commas
-                    d['n_fmt'] = f'{d["n"]:,}'
-                    d['total_fmt'] = f'{d["total"]:,}'
-
-                    # 2. Handle the rate (lines/s)
-                    # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
-                    rate = d.get('rate')
-                    if rate is not None:
-                        d['rate_fmt'] = f'{rate:,.2f}'
-                    else:
-                        # If rate is None, we can try to calculate it manually based on elapsed time
-                        # or default to '?' if elapsed is 0.
-                        elapsed = d.get('elapsed', 0)
-                        n = d.get('n', 0)
-                        if elapsed > 0:
-                            calc_rate = n / elapsed
-                            d['rate_fmt'] = f'{calc_rate:,.2f}'
-                        else:
-                            d['rate_fmt'] = '?'
-                    return d
-
-            # Define the bar format string
-            bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
-
-            # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
-            # ensuring the rate has a chance to be calculated and displayed.
-            with CommaTqdm(total=total_rows,
-                           desc="Removing ST from TT",
-                           bar_format=bar_fmt,
-                           miniters=1,
-                           mininterval=0.1) as pbar:
-
+            with CommaTqdm(total=total_rows, desc="Removing ST from TT") as pbar:
                 for row in reader:
                     st = row["st"].strip()
                     tt = row["tt"].strip()
@@ -276,45 +211,7 @@ def remove_timestamps(input_file, output_file, dirty_file=None):
             dirty_writer = csv.DictWriter(dirty_outfile, fieldnames=reader.fieldnames)
             writer.writeheader()
 
-            class CommaTqdm(tqdm):
-                @property
-                def format_dict(self):
-                    # Get the standard dictionary
-                    d = super().format_dict
-                    
-                    # 1. Format the counter and total with commas
-                    d['n_fmt'] = f'{d["n"]:,}'
-                    d['total_fmt'] = f'{d["total"]:,}'
-                    
-                    # 2. Handle the rate (lines/s)
-                    # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
-                    rate = d.get('rate')
-                    if rate is not None:
-                        d['rate_fmt'] = f'{rate:,.2f}'
-                    else:
-                        # If rate is None, we can try to calculate it manually based on elapsed time
-                        # or default to '?' if elapsed is 0.
-                        elapsed = d.get('elapsed', 0)
-                        n = d.get('n', 0)
-                        if elapsed > 0:
-                            calc_rate = n / elapsed
-                            d['rate_fmt'] = f'{calc_rate:,.2f}'
-                        else:
-                            d['rate_fmt'] = '?'
-                    
-                    return d
-
-            # Define the bar format string
-            bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
-
-            # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
-            # ensuring the rate has a chance to be calculated and displayed.
-            with CommaTqdm(total=total_rows, 
-                        desc="Cleaning timestamps from ST & TT",
-                        bar_format=bar_fmt,
-                        miniters=1,
-                        mininterval=0.1) as pbar:
-            
+            with CommaTqdm(total=total_rows, desc="Cleaning timestamps from ST & TT") as pbar:
                 for row in reader:
                     st = row["st"].strip()
                     tt = row["tt"].strip()
@@ -358,44 +255,7 @@ def remove_special_characters(input_file, output_file, dirty_file=None):
             dirty_writer = csv.DictWriter(dirty_outfile, fieldnames=reader.fieldnames)
             writer.writeheader()
 
-            class CommaTqdm(tqdm):
-                @property
-                def format_dict(self):
-                    # Get the standard dictionary
-                    d = super().format_dict
-
-                    # 1. Format the counter and total with commas
-                    d['n_fmt'] = f'{d["n"]:,}'
-                    d['total_fmt'] = f'{d["total"]:,}'
-
-                    # 2. Handle the rate (lines/s)
-                    # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
-                    rate = d.get('rate')
-                    if rate is not None:
-                        d['rate_fmt'] = f'{rate:,.2f}'
-                    else:
-                        # If rate is None, we can try to calculate it manually based on elapsed time
-                        # or default to '?' if elapsed is 0.
-                        elapsed = d.get('elapsed', 0)
-                        n = d.get('n', 0)
-                        if elapsed > 0:
-                            calc_rate = n / elapsed
-                            d['rate_fmt'] = f'{calc_rate:,.2f}'
-                        else:
-                            d['rate_fmt'] = '?'
-                    return d
-
-            # Define the bar format string
-            bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
-
-            # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
-            # ensuring the rate has a chance to be calculated and displayed.
-            with CommaTqdm(total=total_rows,
-                           desc="Cleaning special characters",
-                           bar_format=bar_fmt,
-                           miniters=1,
-                           mininterval=0.1) as pbar:
-                
+            with CommaTqdm(total=total_rows, desc="Cleaning special characters") as pbar:
                 for row in reader:
                     st = re.sub(r'[\u200E\u202A\u202B\u202C\u202D\u202E\u2028\u2029\u00b6\u00a7\u0640\u200e]', '', row['st'])
                     tt = re.sub(r'[\u200E\u202A\u202B\u202C\u202D\u202E\u2028\u2029\u00b6\u00a7\u0640\u200e]', '', row['tt'])
@@ -459,45 +319,7 @@ def remove_duplicates(input_file, output_file, dirty_file=None):
         
         duplicate_lines = 0
 
-        class CommaTqdm(tqdm):
-            @property
-            def format_dict(self):
-                # Get the standard dictionary
-                d = super().format_dict
-
-                # 1. Format the counter and total with commas
-                d['n_fmt'] = f'{d["n"]:,}'
-                d['total_fmt'] = f'{d["total"]:,}'
-
-                # 2. Handle the rate (lines/s)
-                # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
-                rate = d.get('rate')
-                if rate is not None:
-                    d['rate_fmt'] = f'{rate:,.2f}'
-                else:
-                    # If rate is None, we can try to calculate it manually based on elapsed time
-                    # or default to '?' if elapsed is 0.
-                    elapsed = d.get('elapsed', 0)
-                    n = d.get('n', 0)
-                    if elapsed > 0:
-                        calc_rate = n / elapsed
-                        d['rate_fmt'] = f'{calc_rate:,.2f}'
-                    else:
-                        d['rate_fmt'] = '?'
-
-                return d
-
-        # Define the bar format string
-        bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
-
-        # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
-        # ensuring the rate has a chance to be calculated and displayed.
-        with CommaTqdm(total=total_rows,
-                       desc="Removing duplicates",
-                       bar_format=bar_fmt,
-                       miniters=1,
-                       mininterval=0.1) as pbar:
-
+        with CommaTqdm(total=total_rows, desc="Removing duplicates") as pbar:
             for row in reader:
                 if row[1] == row[2]:
                     dirty_writer.writerow(row)
@@ -521,45 +343,7 @@ def remove_empty_lines(input_file, output_file, dirty_file=None):
         dirty_writer = csv.writer(dirty_outfile)
         empty_lines = 0
         
-        class CommaTqdm(tqdm):
-            @property
-            def format_dict(self):
-                # Get the standard dictionary
-                d = super().format_dict
-
-                # 1. Format the counter and total with commas
-                d['n_fmt'] = f'{d["n"]:,}'
-                d['total_fmt'] = f'{d["total"]:,}'
-
-                # 2. Handle the rate (lines/s)
-                # We check 'rate' specifically. If it is None, tqdm hasn't calculated it yet.
-                rate = d.get('rate')
-                if rate is not None:
-                    d['rate_fmt'] = f'{rate:,.2f}'
-                else:
-                    # If rate is None, we can try to calculate it manually based on elapsed time
-                    # or default to '?' if elapsed is 0.
-                    elapsed = d.get('elapsed', 0)
-                    n = d.get('n', 0)
-                    if elapsed > 0:
-                        calc_rate = n / elapsed
-                        d['rate_fmt'] = f'{calc_rate:,.2f}'
-                    else:
-                        d['rate_fmt'] = '?'
-
-                return d
-
-        # Define the bar format string
-        bar_fmt = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt} lines/s]"
-
-        # We set miniters=1 and mininterval=0 to force updates even if the loop is fast,
-        # ensuring the rate has a chance to be calculated and displayed.
-        with CommaTqdm(total=total_rows,
-                       desc="Checking empty lines",
-                       bar_format=bar_fmt,
-                       miniters=1,
-                       mininterval=0.1) as pbar:
-
+        with CommaTqdm(total=total_rows, desc="Checking empty lines") as pbar:
             for row in reader:
                 if row[1] != '' and row[2] != '':
                     writer.writerow(row)
