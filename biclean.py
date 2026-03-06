@@ -10,6 +10,34 @@ from multiprocessing import Pool
 # Chunk size for parallel processing (~50k–100k rows). Tune for 22M rows.
 CHUNK_SIZE = 100_000
 
+# Combined timestamp regex (one pass instead of 5). Precompiled at module load.
+_TIMESTAMP_PATTERN = re.compile(
+    r'(?:'
+    r'\b\d+\s+\d{2}:\d{2}:\d{2}[,\.]\d{3}\s+--\s+\d{2}:\d{2}:\d{2}[,\.]\d{3}'  # 546 00:31:48,490 -- 00:31:49,865
+    r'|\d{2}:\d{2}:\d{2}[,\.]\d{3}\.+\s+\d{2}:\d{2}:\d{2}[,\.]\d{3}'           # 01:19:31,500... 01:19:32,832
+    r'|\b[A-Za-z]+:\s*\d+,\d+:\d{2}:\d{2}[.,]\d{2,3}\.\.\.'                    # Comment: 0,0:00:01.00...
+    r'|\b\d+\s+\d{2}:\d{2}:\d{2}[,\.]\d{3}'                                   # 546 00:31:48,490
+    r'|\[\d{2}:\d{2}:\d{2}[.,]\d{2}\]'                                         # [00:01:23.45]
+    r')'
+)
+_WHITESPACE_PATTERN = re.compile(r'\s{2,}')
+
+# Special chars: one pattern + replacement map for a single re.sub pass per string.
+_SPECIAL_CHAR_PATTERN = re.compile(
+    r'[\u200E\u202A\u202B\u202C\u202D\u202E\u2028\u2029\u00b6\u00a7\u0640'
+    r'\u2013\u2014'  # en/em dash -> '-'
+    r'\u2018\u2019\u201A\u201B\u2032\u2035'  # squotes -> "'"
+    r'\u201C\u201D\u201E\u201F\u2033\u2036'  # dquotes -> '"'
+    r'\u3000]'  # ideographic space -> ' '
+)
+_SPECIAL_CHAR_REPLACEMENTS = {
+    **{c: '' for c in '\u200E\u202A\u202B\u202C\u202D\u202E\u2028\u2029\u00b6\u00a7\u0640'},
+    **{c: '-' for c in '\u2013\u2014'},
+    **{c: "'" for c in '\u2018\u2019\u201A\u201B\u2032\u2035'},
+    **{c: '"' for c in '\u201C\u201D\u201E\u201F\u2033\u2036'},
+    '\u3000': ' ',
+}
+
 
 class CommaTqdm(tqdm):
     """
@@ -238,33 +266,15 @@ def remove_st_in_tt(input_file, output_file, dirty_file=None, workers=1):
         return 0
 
 
-def _timestamp_patterns():
-    """Build list of compiled timestamp regexes (used in worker)."""
-    patterns = []
-    patterns.append(re.compile(
-        r'\b\d+\s+' r'\d{2}:\d{2}:\d{2}[,\.]\d{3}' r'\s+--\s+' r'\d{2}:\d{2}:\d{2}[,\.]\d{3}'))
-    patterns.append(re.compile(
-        r'\d{2}:\d{2}:\d{2}[,\.]\d{3}' r'\.+\s+' r'\d{2}:\d{2}:\d{2}[,\.]\d{3}'))
-    patterns.append(re.compile(r'\b[A-Za-z]+:\s*\d+,\d+:\d{2}:\d{2}[.,]\d{2,3}\.\.\.'))
-    patterns.append(re.compile(r'\b\d+\s+' r'\d{2}:\d{2}:\d{2}[,\.]\d{3}'))
-    patterns.append(re.compile(r'\[(\d{2}:\d{2}:\d{2}[.,]\d{2})\]'))
-    return patterns
-
-
 def _worker_remove_timestamps(chunk):
-    """Remove timestamp patterns from ST/TT. Returns (cleaned_rows, dirty_rows)."""
-    timestamp_patterns = _timestamp_patterns()
+    """Remove timestamp patterns from ST/TT. Returns (cleaned_rows, dirty_rows). Uses combined _TIMESTAMP_PATTERN."""
     cleaned = []
     dirty = []
     for row in chunk:
         st = row["st"].strip()
         tt = row["tt"].strip()
-        st_cleaned, tt_cleaned = st, tt
-        for pat in timestamp_patterns:
-            st_cleaned = pat.sub("", st_cleaned)
-            tt_cleaned = pat.sub("", tt_cleaned)
-            st_cleaned = re.sub(r'\s{2,}', ' ', st_cleaned).strip()
-            tt_cleaned = re.sub(r'\s{2,}', ' ', tt_cleaned).strip()
+        st_cleaned = _WHITESPACE_PATTERN.sub(' ', _TIMESTAMP_PATTERN.sub("", st)).strip()
+        tt_cleaned = _WHITESPACE_PATTERN.sub(' ', _TIMESTAMP_PATTERN.sub("", tt)).strip()
         out = {"index": row["index"], "st": st_cleaned, "tt": tt_cleaned}
         if st != st_cleaned or tt != tt_cleaned:
             dirty.append(row)
@@ -328,21 +338,18 @@ def remove_timestamps(input_file, output_file, dirty_file=None, workers=1):
         return 0
 
 
+def _special_char_repl(match):
+    """Lookup replacement for a single special character."""
+    return _SPECIAL_CHAR_REPLACEMENTS.get(match.group(0), '')
+
+
 def _worker_remove_special_characters(chunk):
-    """Normalize special characters in ST/TT. Returns (cleaned_rows, dirty_rows)."""
+    """Normalize special characters in ST/TT. Returns (cleaned_rows, dirty_rows). Single regex pass per string."""
     cleaned = []
     dirty = []
     for row in chunk:
-        st = re.sub(r'[\u200E\u202A\u202B\u202C\u202D\u202E\u2028\u2029\u00b6\u00a7\u0640\u200e]', '', row['st'])
-        tt = re.sub(r'[\u200E\u202A\u202B\u202C\u202D\u202E\u2028\u2029\u00b6\u00a7\u0640\u200e]', '', row['tt'])
-        st = re.sub(r'[\u2013\u2014]', '-', st)
-        tt = re.sub(r'[\u2013\u2014]', '-', tt)
-        st = re.sub(r'[\u2018\u2019\u201A\u201B\u2032\u2035]', "'", st)
-        tt = re.sub(r'[\u2018\u2019\u201A\u201B\u2032\u2035]', "'", tt)
-        st = re.sub(r'[\u201C\u201D\u201E\u201F\u2033\u2036]', '"', st)
-        tt = re.sub(r'[\u201C\u201D\u201E\u201F\u2033\u2036]', '"', tt)
-        st = st.replace('\u3000', ' ')
-        tt = tt.replace('\u3000', ' ')
+        st = _SPECIAL_CHAR_PATTERN.sub(_special_char_repl, row['st'])
+        tt = _SPECIAL_CHAR_PATTERN.sub(_special_char_repl, row['tt'])
         out = {"index": row["index"], "st": st, "tt": tt}
         if row['st'] != st or row['tt'] != tt:
             dirty.append(row)
